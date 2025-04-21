@@ -27,6 +27,12 @@ import constants as ct
 # 「.env」ファイルで定義した環境変数の読み込み
 load_dotenv()
 
+############################################################
+# 変数定義
+############################################################
+seach_kwargs_num = 5  # RAGのRetrieverで取得するドキュメント数
+chunk_size_num = 500  # チャンク分割のサイズ
+chunk_overlap_num = 50  # チャンク分割のオーバーラップサイズ
 
 ############################################################
 # 関数定義
@@ -123,8 +129,8 @@ def initialize_retriever():
     
     # チャンク分割用のオブジェクトを作成
     text_splitter = CharacterTextSplitter(
-        chunk_size=500,
-        chunk_overlap=50,
+        chunk_size=chunk_size_num,
+        chunk_overlap=chunk_overlap_num,
         separator="\n"
     )
 
@@ -135,7 +141,7 @@ def initialize_retriever():
     db = Chroma.from_documents(splitted_docs, embedding=embeddings)
 
     # ベクターストアを検索するRetrieverの作成
-    st.session_state.retriever = db.as_retriever(search_kwargs={"k": 5})
+    st.session_state.retriever = db.as_retriever(search_kwargs={"k": seach_kwargs_num})
 
 
 def initialize_session_state():
