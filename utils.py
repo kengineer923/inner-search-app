@@ -106,7 +106,7 @@ def get_llm_response(chat_message):
 
     # ページ番号付与処理を削除
     for document in llm_response["context"]:
-        pass  # ページ番号の処理はinitialize.pyのfile_load()に一元化
+        pass
 
     st.session_state.chat_history.extend([HumanMessage(content=chat_message), llm_response["answer"]])
 
