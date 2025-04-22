@@ -14,6 +14,8 @@ from langchain_openai import ChatOpenAI
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import constants as ct
+import pandas as pd  # Add pandas for CSV processing
+import logging  # Add logging for debug messages
 
 
 ############################################################
@@ -59,6 +61,41 @@ def build_error_message(message):
     return "\n".join([message, ct.COMMON_ERROR_MESSAGE])
 
 
+def filter_csv_rows_by_department(chat_message, csv_path):
+    """
+    CSVファイルを読み込み、指定部署でフィルタリングしたテーブルをMarkdown形式で返す
+    """
+    import re
+    logger = logging.getLogger(ct.LOGGER_NAME)
+    try:
+        df = pd.read_csv(csv_path, encoding='utf-8')
+        if '部署' not in df.columns:
+            logger.error(f"CSV filtering failed: '部署'列が存在しません")
+            return None
+        # 部署名の抽出: 正規表現 or 実データからマッチ
+        match = re.search(r"部署が(.+?)の", chat_message)
+        if match:
+            dept_name = match.group(1)
+        else:
+            # ユニークな部署名からチャットメッセージに含まれるものを探す
+            dept_name = None
+            for dept in df['部署'].unique():
+                if dept and dept in chat_message:
+                    dept_name = dept
+                    break
+            if not dept_name:
+                # フォールバック: '部署'以降の文字を削除
+                dept_name = chat_message.replace("部署", "").split()[0]
+        logger.info(f"Filtering CSV for department: {dept_name}")
+        filtered = df[df['部署'] == dept_name]
+        if filtered.empty:
+            return f"部署「{dept_name}」の従業員情報が見つかりませんでした。"
+        return filtered.to_markdown(index=False)
+    except Exception as e:
+        logger.error(f"CSV filtering failed: {e}")
+        return None
+
+
 def get_llm_response(chat_message):
     """
     LLMからの回答取得
@@ -69,6 +106,20 @@ def get_llm_response(chat_message):
     Returns:
         LLMからの回答
     """
+    # CSV結合ドキュメントの場合、社内問い合わせモードでのみアプリ側で直接処理
+    if st.session_state.mode == ct.ANSWER_MODE_2:
+        retriever = st.session_state.retriever
+        if retriever and hasattr(retriever, 'get_relevant_documents'):
+            try:
+                docs = retriever.get_relevant_documents(chat_message)
+            except Exception:
+                docs = []
+            if docs and docs[0].metadata.get('source') == 'combined_csv':
+                csv_path = docs[0].metadata.get('original_sources', '')
+                result = filter_csv_rows_by_department(chat_message, csv_path)
+                if result:
+                    return {'answer': result, 'context': docs}
+
     # LLMのオブジェクトを用意
     llm = ChatOpenAI(model_name=ct.MODEL, temperature=ct.TEMPERATURE)
 

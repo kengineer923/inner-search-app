@@ -18,7 +18,9 @@ from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain.schema import Document
 import constants as ct
+import csv
 
 
 ############################################################
@@ -31,8 +33,8 @@ load_dotenv()
 # 変数定義
 ############################################################
 seach_kwargs_num = 5  # RAGのRetrieverで取得するドキュメント数
-chunk_size_num = 500  # チャンク分割のサイズ
-chunk_overlap_num = 50  # チャンク分割のオーバーラップサイズ
+chunk_size_num = 1024  # チャンク分割のサイズ
+chunk_overlap_num = 256  # チャンク分割のオーバーラップサイズ
 
 ############################################################
 # 関数定義
@@ -118,6 +120,16 @@ def initialize_retriever():
     # RAGの参照先となるデータソースの読み込み
     docs_all = load_data_sources()
 
+    # CSVファイルのみを結合対象とし、他のドキュメントは除外
+    csv_docs = [doc for doc in docs_all if doc.metadata.get("source", "").endswith(".csv")]
+    if csv_docs:
+        combined_doc = combine_csv_rows_into_single_document(csv_docs)
+        docs_all = [combined_doc]
+
+    # CSVファイルの場合、各行にメタデータを付与
+    if csv_docs:
+        docs_all = add_metadata_to_csv_rows(docs_all)
+
     # OSがWindowsの場合、Unicode正規化と、cp932（Windows用の文字コード）で表現できない文字を除去
     for doc in docs_all:
         doc.page_content = adjust_string(doc.page_content)
@@ -134,14 +146,21 @@ def initialize_retriever():
         separator="\n"
     )
 
-    # チャンク分割を実施
-    splitted_docs = text_splitter.split_documents(docs_all)
+    # チャンク分割を実施（CSV結合ドキュメントは分割しない）
+    if docs_all and docs_all[0].metadata.get("source") == "combined_csv":
+        splitted_docs = docs_all
+    else:
+        splitted_docs = text_splitter.split_documents(docs_all)
 
     # ベクターストアの作成
     db = Chroma.from_documents(splitted_docs, embedding=embeddings)
 
+    # seach_kwargs_numを動的に調整
+    chat_message = st.session_state.get("last_user_message", "")
+    adjusted_seach_kwargs_num = adjust_seach_kwargs_num_based_on_csv(chat_message)
+
     # ベクターストアを検索するRetrieverの作成
-    st.session_state.retriever = db.as_retriever(search_kwargs={"k": seach_kwargs_num})
+    st.session_state.retriever = db.as_retriever(search_kwargs={"k": adjusted_seach_kwargs_num})
 
 
 def initialize_session_state():
@@ -167,6 +186,10 @@ def load_data_sources():
     # ファイル読み込みの実行（渡した各リストにデータが格納される）
     recursive_file_check(ct.RAG_TOP_FOLDER_PATH, docs_all)
 
+    # デバッグ用: 読み込んだデータソースの数をログに記録
+    logger = logging.getLogger(ct.LOGGER_NAME)
+    logger.info(f"Total documents loaded: {len(docs_all)}")
+
     web_docs_all = []
     # ファイルとは別に、指定のWebページ内のデータも読み込み
     # 読み込み対象のWebページ一覧に対して処理
@@ -178,6 +201,9 @@ def load_data_sources():
         web_docs_all.extend(web_docs)
     # 通常読み込みのデータソースにWebページのデータを追加
     docs_all.extend(web_docs_all)
+
+    # デバッグ用: Webページから読み込んだデータソースの数をログに記録
+    logger.info(f"Total web documents loaded: {len(web_docs_all)}")
 
     return docs_all
 
@@ -257,3 +283,73 @@ def adjust_string(s):
     
     # OSがWindows以外の場合はそのまま返す
     return s
+
+
+def adjust_seach_kwargs_num_based_on_csv(chat_message):
+    """
+    CSV参照時に動的にseach_kwargs_numを調整する
+
+    Args:
+        chat_message: ユーザー入力値
+
+    Returns:
+        動的に調整されたseach_kwargs_numの値
+    """
+    # CSV参照が必要かどうかを判定（例: "CSV"というキーワードが含まれる場合）
+    if "CSV" in chat_message:
+        # CSVの行数に基づいてseach_kwargs_numを調整（仮に10行とする）
+        return 10
+    
+    # デフォルト値を返す
+    return seach_kwargs_num
+
+
+def add_metadata_to_csv_rows(docs):
+    """
+    CSVの各行にメタデータ（行番号、列名）を付与する
+
+    Args:
+        docs: CSVLoaderで読み込んだドキュメントリスト
+
+    Returns:
+        メタデータが付与されたドキュメントリスト
+    """
+    updated_docs = []
+    for i, doc in enumerate(docs):
+        # 行番号をメタデータに追加
+        doc.metadata["row_number"] = i + 1
+        # 列名をメタデータに追加（仮に列名が取得可能な場合）
+        if "columns" in doc.metadata:
+            doc.metadata["columns"] = doc.metadata["columns"]
+        updated_docs.append(doc)
+    return updated_docs
+
+
+def combine_csv_rows_into_single_document(docs):
+    """
+    CSVの全行を1つのドキュメントに結合する
+    """
+    # CSVを直接読み込んで全行を結合
+    csv_path = docs[0].metadata.get("source") if docs else None
+    content_lines = []
+    if csv_path:
+        try:
+            with open(csv_path, encoding="utf-8") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    content_lines.append(", ".join(row))
+        except Exception:
+            # エラー時は既存のdocsから結合
+            for doc in docs:
+                if doc.page_content:
+                    content_lines.append(doc.page_content)
+    combined_content = "\n".join(content_lines)
+    # デバッグ用ログ
+    logger = logging.getLogger(ct.LOGGER_NAME)
+    logger.info(f"Combined CSV read directly: {len(content_lines)} lines. Content length: {len(combined_content)} chars.")
+    combined_metadata = {
+        "source": "combined_csv",
+        "row_count": len(content_lines) - 1,  # ヘッダーを除く行数
+        "original_sources": csv_path or ""
+    }
+    return Document(page_content=combined_content, metadata=combined_metadata)
