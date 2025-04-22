@@ -104,6 +104,10 @@ def get_llm_response(chat_message):
 
     llm_response = chain.invoke({"input": chat_message, "chat_history": st.session_state.chat_history})
 
+    # ページ番号付与処理を削除
+    for document in llm_response["context"]:
+        pass  # ページ番号の処理はinitialize.pyのfile_load()に一元化
+
     st.session_state.chat_history.extend([HumanMessage(content=chat_message), llm_response["answer"]])
 
     return llm_response

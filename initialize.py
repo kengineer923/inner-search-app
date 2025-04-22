@@ -223,6 +223,15 @@ def file_load(path, docs_all):
         # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
         loader = ct.SUPPORTED_EXTENSIONS[file_extension](path)
         docs = loader.load()
+
+        # PDFの場合、ページ番号をメタデータに追加
+        if file_extension == ".pdf":
+            import fitz  # PyMuPDF
+            pdf_document = fitz.open(path)
+            for i, doc in enumerate(docs):
+                doc.metadata["page"] = f"ページNo.{i + 1}"
+            pdf_document.close()
+
         docs_all.extend(docs)
 
 
